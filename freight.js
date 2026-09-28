@@ -1,0 +1,19 @@
+const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const map=L.map('map').setView([36.15,136.3],8);
+L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png',{maxZoom:18,attribution:'<a href="https://maps.gsi.go.jp/development/ichiran.html">地理院タイル</a> | 位置データ：4号車の5号車寄り（推定）'}).addTo(map);
+const layer=L.layerGroup().addTo(map);let trains=[],hapiTrains=[],stamp=null,loading=false,timer,failed=false;
+const fmt=t=>new Date(t).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'});
+const stale=t=>!Number.isFinite(Date.parse(t))||Date.now()-Date.parse(t)>180000;
+const num=s=>String(s).replace(/[MR]/g,'').trim();
+function draw(){layer.clearLayers();const q=$('#search').value.trim().toLowerCase(),bounds=map.getBounds();const rows=[];for(const t of trains){if(t.type!=='freight'||t.duty?.state==='suspended'||!Number.isFinite(t.lat)||!Number.isFinite(t.lon))continue;if(hapiTrains.some(h=>num(h.number)===num(t.no)))continue;if(q&&!JSON.stringify([t.no,t.from,t.to,t.line,t.duty?.loco]).toLowerCase().includes(q))continue;
+const note=t.duty?.state==='unknown'?'運転・充当機の投稿未確認':'運用情報あり（位置は推定）';
+const html='<b>'+esc(t.no)+'</b><br>'+esc(t.line)+'<br>'+esc(t.from)+' → '+esc(t.to)+'<br>機関車：'+esc(t.duty?.loco||'未入力')+'<br>'+note+'<br><strong>時刻表に基づく推定位置</strong><br>データ更新 '+esc(fmt(stamp));
+const marker=L.marker([t.lat,t.lon],{icon:L.divIcon({className:'',html:'<span class="badge">'+esc(t.no)+'</span>',iconSize:[70,25],iconAnchor:[35,12]})}).bindPopup(html).addTo(layer);if(bounds.contains([t.lat,t.lon]))rows.push({t,marker});}
+$('#rows').replaceChildren();for(const {t,marker} of rows){const b=document.createElement('button');b.className='row';b.textContent=t.no+' ｜ '+(t.duty?.loco||'機関車未入力')+' ｜ '+t.from+' → '+t.to;b.onclick=()=>{map.panTo([t.lat,t.lon]);marker.openPopup()};$('#rows').append(b)}if(!rows.length)$('#rows').textContent=failed?'データを取得できません。次回の更新で再試行します。':'この表示範囲・検索条件に該当する列車はありません。';}
+async function get(path){const r=await fetch(RAIL_API+path,{cache:'no-store',signal:AbortSignal.timeout(20000)});if(!r.ok)throw Error('unavailable');return r.json()}
+async function refresh(){if(loading||document.hidden)return;clearTimeout(timer);loading=true;const start=Date.now();$('#refresh').disabled=true;const results=await Promise.allSettled([get('/api/freight'),get('/api/line?id=hapi')]);
+const h=results[1];hapiTrains=[];if(h.status==='fulfilled'&&Array.isArray(h.value.trains)){const d=h.value;hapiTrains=d.trains.filter(t=>t.type==='貨物');$('#hapi-status').textContent='提供元更新 '+fmt(d.updatedAt)+(stale(d.updatedAt)?' · 更新が遅れています':'')+' · '+hapiTrains.length+'本';$('#hapi').innerHTML=hapiTrains.map(t=>'<div class="card"><strong>'+esc(t.number)+'</strong>'+esc(t.position)+'<br>'+esc(t.direction)+'<br>遅れ：'+(t.delayMinutes===null?'情報なし':esc(t.delayMinutes)+'分')+'</div>').join('')||'<p>現在、提供元に掲載されている貨物列車はありません。</p>';}else{$('#hapi-status').textContent='取得失敗 · 30秒ごとに再試行';$('#hapi').textContent='現在の位置は確認できません。';}
+const f=results[0];if(f.status==='fulfilled'&&Array.isArray(f.value.trains)&&Number.isFinite(Date.parse(f.value.generatedAt))){trains=f.value.trains;stamp=f.value.generatedAt;failed=false;$('#status').textContent='時刻表による推定位置 · 提供元更新 '+fmt(stamp)+(stale(stamp)?' · 更新が遅れています':'')+' · 30秒ごとに更新';}else{trains=[];failed=true;$('#status').textContent='推定位置の取得失敗 · 30秒ごとに再試行';}draw();loading=false;$('#refresh').disabled=false;timer=setTimeout(refresh,Math.max(1000,30000-(Date.now()-start)));}
+map.on('moveend',draw);$('#search').oninput=draw;$('#refresh').onclick=refresh;
+document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{const views={hokuriku:[[36.15,136.3],8],west:[[34.8,134.3],6],all:[[37,137],5]};const [center,zoom]=views[b.dataset.view];map.setView(center,zoom)});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)clearTimeout(timer);else refresh()});refresh();
